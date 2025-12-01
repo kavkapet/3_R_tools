@@ -179,8 +179,8 @@ write.csv(tab2_sumKU, "sumar_okoli_KU.csv", row.names = FALSE)
 #### DRUHA PULKA - summrry KU ORP
 
 
-
-
+ORP <- read.csv("ORP_Area.csv", sep = ",", stringsAsFactors = FALSE, , fileEncoding = "UTF-8")
+KU_ORP <- read.csv("KU_ORP_Area.csv", sep = ",", stringsAsFactors = FALSE, , fileEncoding = "UTF-8")
 KU_ORP_les <- read.csv("KU_ORP_Les2.csv", sep = ",", stringsAsFactors = FALSE, , fileEncoding = "UTF-8")
 KU_ORP_Lpis <- read.csv("KU_ORP_Lpis.csv", sep = ",", stringsAsFactors = FALSE, fileEncoding = "UTF-8")
 KU_ORP_Orna <- read.csv("KU_ORP_Orna.csv", sep = ",", stringsAsFactors = FALSE, fileEncoding = "UTF-8")
@@ -264,12 +264,9 @@ for (nm in layers) {
 tabKU_ORP <- Reduce(function(x, y) merge(x, y, by = "KOD_KU", all = TRUE),
                  summ_listKU)
 
-ku_total <- readKU_ORP %>%
-  select(KOD_KU, SHAPE_Area)
-
 # připojit k tabKU_ORP
-tabKU_ORP_ratio <- ku_total %>%
-  left_join(tabKU_ORP, by = "KOD_KU") %>%
+KU_ORP <- tabKU_ORP %>%
+  left_join(KU_ORP, by = "KOD_KU") %>%
   # spočítat poměr pro všechna pole KU_ORP_* vůči SHAPE_Area
   mutate(
     across(
@@ -280,7 +277,8 @@ tabKU_ORP_ratio <- ku_total %>%
   )
 
 #Suppary pro mapovani biotopu
-
+tabKU_ORP_ratio <- KU_ORP %>%
+  mutate(across(2:15, ~ replace_na(., 0)))
 # zdrojová vrstva
 df <- KU_ORP_bio
 
@@ -331,4 +329,6 @@ fwrite(tabORP_ratio, 'ORP_plochy.csv')
 fwrite(tabKU_ORP_ratio, 'KU_ORP_plochy.csv')
 fwrite(bio_summary_wide, 'map_bio_prunik_summaryORP.csv')
 fwrite(bio_summaryKU_wide, 'map_bio_prunik_summaryKU.csv')
+
+xx = read.csv('KU_ORP_plochy.csv')
 
