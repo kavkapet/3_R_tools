@@ -59,6 +59,7 @@ for (file_path in file_list) {
 #head(final_data)
 
 all_data <- merge(data_spat, final_data, by.x = "TARGET_FID",by.y = "ID", all = FALSE)
+write.fst(all_data, "all_data.fst")
 all_data_kat = all_data
 all_data_upov = all_data
 # Optional: Save the final dataset to a new Excel file
@@ -242,3 +243,150 @@ write.csv(averages_upov, "averages_upov.csv")
 write.csv(averages_kat, "averages_kat.csv")
 
 
+#ffffffffff - statistika bodových maxim
+
+# df = tvůj původní data.frame
+# df <- readRDS("...") nebo jak ho načítáš
+
+# --- 1) Vyber sloupce s blokovými maximy a rozbij názvy ---
+
+## ------------------------------------------------------------
+## 0) Data
+## ------------------------------------------------------------
+# tady dosaď svůj objekt s daty:
+# d má mít sloupce typu BM1_10min_rok_10min, BM2_..., M1_..., M2_...
+# d <- datmax
+
+## ------------------------------------------------------------
+## 1) Metainformace o sloupcích s maximy
+## ------------------------------------------------------------
+
+
+rok_idx <- grep("rok", names(all_data))
+d_rok <- subset(all_data, select = c(id_pixel, rok_idx))
+
+all_names <- names(d_rok)
+
+# sloupce typu BM1_..., BM2_..., M1_..., M2_...
+is_BM    <- grepl("^(BM|M)[0-9]+_", all_names)
+bm_names <- all_names[is_BM]
+
+# suffix = část za prvním "_" (např. "10min_rok_10min")
+suffix <- sub("^[^_]+_", "", bm_names)
+
+# pořadí maxima 1..20 z prefixu BM1 / M1
+ord <- as.integer(gsub("^(BM|M)", "", sub("_.*", "", bm_names)))
+
+meta <- data.frame(
+  col    = bm_names,
+  suffix = suffix,
+  ord    = ord,
+  stringsAsFactors = FALSE
+)
+
+## ------------------------------------------------------------
+## 2) Funkce pro log-lineární trend (lm) a Gumbel
+## ------------------------------------------------------------
+
+# log-lineární trend: y = a * ln(x) + b, x = 1..n
+fit_llin <- function(y) {
+  y <- as.numeric(y)
+  x <- seq_along(y)
+  mod <- lm(y ~ log(x))
+  s   <- summary(mod)
+  c(intercept = coef(mod)[1],
+    slope     = coef(mod)[2],
+    R2        = s$r.squared)
+}
+
+# odhad Gumbela z průměru a sd (metoda momentů)
+gumbel_fit <- function(x) {
+  x <- as.numeric(x)
+  x <- x[!is.na(x)]
+  if (length(x) < 3) return(list(mu = NA_real_, beta = NA_real_))
+  gamma <- 0.5772156649               # Eulerova konstanta
+  s     <- sd(x)
+  m     <- mean(x)
+  beta  <- s * sqrt(6) / pi           # scale
+  mu    <- m - gamma * beta           # location
+  list(mu = mu, beta = beta)
+}
+
+# návratové hodnoty pro zadaná T (v letech)
+gumbel_return <- function(T, mu, beta) {
+  if (is.na(mu) || is.na(beta)) return(rep(NA_real_, length(T)))
+  zT <- -log(-log(1 - 1/T))           # redukovaná proměnná
+  mu + beta * zT
+}
+
+T_vals <- c(2, 5, 10, 20, 50, 100)       # návratová období
+
+## ------------------------------------------------------------
+## 3) Smyčka přes suffix (typ maxima) a stanice
+## ------------------------------------------------------------
+
+## 3) Smyčka přes suffix (typ maxima) a stanice + tisk názvu stanice
+
+# název sloupce s identifikátorem stanice:
+station_names <- d_rok$id_pixel   # pokud je to jiný sloupec, např. d$stanice, změň tady
+
+res_list <- lapply(split(meta, meta$suffix), function(mg) {
+  cols <- mg$col[order(mg$ord)]                # BM1..BM20 ve správném pořadí
+  Y    <- as.matrix(d_rok[, cols, drop = FALSE])   # řádky = stanice, sloupce = maxima
+  
+  out_rows <- lapply(seq_len(nrow(Y)), function(i) {
+    
+    # >>> tady proběhne tisk názvu stanice do konzole <<<
+    cat("Zpracovávám stanici:", station_names[i],
+        " (suffix:", mg$suffix[1], ")\n")
+    
+    # log-lineární trend
+    ll <- fit_llin(Y[i, ])
+    
+    # Gumbelovy kvantily
+    fit_g <- gumbel_fit(Y[i, ])
+    q_vec <- gumbel_return(T_vals, fit_g$mu, fit_g$beta)
+    names(q_vec) <- paste0("Q", T_vals, "_let")
+    
+    data.frame(
+      station   = station_names[i],
+      code      = mg$suffix[1],
+      intercept = ll["intercept"],
+      slope     = ll["slope"],
+      R2        = ll["R2"],
+      as.list(q_vec),
+      row.names = NULL
+    )
+  })
+  
+  do.call(rbind, out_rows)
+})
+
+# výsledný dlouhý data.frame
+res_long <- do.call(rbind, res_list)
+
+res_wide <- res_long %>%
+  # vše kromě station a code přelijeme do dlouhého tvaru
+  pivot_longer(
+    cols = -c(station, code),
+    names_to = "param",
+    values_to = "value"
+  ) %>%
+  # složíme název výsledného sloupce: code_param
+  mutate(col_name = paste(code, param, sep = "_")) %>%
+  select(station, col_name, value) %>%
+  # a teď zpátky do wide: 1 řádek = station, sloupce = code_param
+  pivot_wider(
+    names_from  = col_name,
+    values_from = value
+  )
+
+idxm <- grepl("rok", names(d_rok)) & grepl("M1_", names(d_rok))
+
+# subset maxim v daném pixelu
+cols <- c("id_pixel", names(d_rok)[idxm])
+d_rok_maxima <- d_rok[, cols, drop = FALSE]
+res_wide$id_pixel = res_wide$station
+
+res_join <- right_join(res_wide, d_rok_maxima, by = "id_pixel")
+write.csv(res_join, "maxima_body_i_gumbel.csv")
