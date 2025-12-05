@@ -3,6 +3,10 @@ library(dplyr)
 library(ggplot2)
 library(fst)
 library(tidyr)
+library(readr)   # read_csv / read_delim
+library(dplyr)
+library(purrr)
+
 
 # Define the file path
 setwd("d:/2_granty_projekty/2_Bezici/2023_SrUrb/01_reseni_projektu/08_blokova_maxima/")
@@ -60,6 +64,8 @@ for (file_path in file_list) {
 
 all_data <- merge(data_spat, final_data, by.x = "TARGET_FID",by.y = "ID", all = FALSE)
 write.fst(all_data, "all_data.fst")
+
+all_data = read.fst("all_data.fst")
 all_data_kat = all_data
 all_data_upov = all_data
 # Optional: Save the final dataset to a new Excel file
@@ -390,3 +396,205 @@ res_wide$id_pixel = res_wide$station
 
 res_join <- right_join(res_wide, d_rok_maxima, by = "id_pixel")
 write.csv(res_join, "maxima_body_i_gumbel.csv")
+res_join = read.csv("maxima_body_i_gumbel.csv")
+
+plot(res_join$`10min_rok_10min_Q10_let`, res_join$BM1_10min_rok_10min)
+abline(1,1, col = "red")
+
+plot(res_join$`30min_rok_30min_Q100_let`, res_join$BM1_30min_rok_30min)
+abline(1,1, col = "blue")
+
+plot(res_join$`6hod_rok_6hod_Q100_let`, res_join$BM1_6hod_rok_6hod)
+abline(1,1, col = "green")
+
+plot(res_join$`1hod_rok_1hod_Q20_let`, res_join$`3hod_rok_3hod_Q20_let`)
+plot(res_join$`1hod_rok_1hod_Q20_let`, res_join$`30min_rok_30min_Q20_let`)
+abline(1,1, col = "brown")
+
+
+#### nacteni stanic chmi a jejich IDF
+
+# balíčky
+
+# kořenový adresář, kde máš ty .csv soubory
+
+setwd("d:/2_granty_projekty/2_Bezici/2023_Srurb/ZZ_prijata_data/perun_idf")
+
+ifiles <- list.files(pattern = ".csv")
+data_list <- lapply(ifiles, function(f) read.csv(f, sep = ";", dec = ".", header = TRUE, fileEncoding = "Windows-1250"))
+
+
+
+# Spojení všech dat
+data_all <- do.call(rbind, data_list)
+
+data_allW = pivot_wider(data_all)
+
+data_allW = pivot_wider(
+  data_all, 
+  names_from = "TRVANI..min.",
+  values_from = c(4:9))
+
+# Seznam sloupců pro regresi
+cols <- grep("^SRA_", names(data_all), value = TRUE)
+
+# Funkce pro výpočet mocninné regrese + R²
+fit_power <- function(x, y) {
+  model <- try(nls(y ~ a * x^b, start = list(a = 1, b = 0.5)), silent = TRUE)
+  if (inherits(model, "try-error")) return(NULL)
+  
+  # Parametry
+  coefs <- coef(model)
+  
+  # Výpočet R²
+  y_pred <- predict(model)
+  ss_res <- sum((y - y_pred)^2)
+  ss_tot <- sum((y - mean(y))^2)
+  r2 <- 1 - ss_res / ss_tot
+  
+  return(c(a = coefs[1], b = coefs[2], R2 = r2))
+}
+
+# Výsledky
+results <- data.frame()
+
+stations <- unique(data_all$ID)
+
+for (st in stations) {
+  subset_data <- subset(data_all, ID == st)
+  x <- subset_data$TRVANI
+  
+  for (col in cols) {
+    y <- subset_data[[col]]
+    params <- fit_power(x, y)
+    if (!is.null(params)) {
+      results <- rbind(results, data.frame(
+        Stanice = st,
+        Sloupec = col,
+        a = params[1],
+        b = params[2],
+        R2 = params[3]
+      ))
+    }
+  }
+}
+
+# Výpis výsledků
+print(results)
+
+setwd("d:/2_granty_projekty/2_Bezici/2023_SrUrb/01_reseni_projektu/08_blokova_maxima/")
+
+resultsW = pivot_wider(
+  results, 
+  names_from = "Sloupec",
+  values_from = c(3:5))
+
+
+
+
+
+# Uložení do CSV
+write.csv(results, "vysledky_regrese.csv", row.names = FALSE)
+
+stationsCHMI = read.csv("stationsCHMI.csv")
+resultsW$ID = resultsW$Stanice
+resultsW$ID = as.numeric(resultsW$ID)
+stationsCHMIlj = left_join(stationsCHMI, resultsW, by = "ID")
+write.csv(stationsCHMIlj, "vysledky_regrese_join.csv", row.names = FALSE)
+
+xx = right_join(stationsCHMIlj, data_allW, by = "ID")
+
+allinone_stations = left_join(xx, d_rok, by = "id_pixel")
+
+allinone_stations = left_join(allinone_stations, res_join, by = "id_pixel")
+
+colnames(allinone_stations)[1] = "Stanice"
+colnames(allinone_stations)[2] = "ID"
+
+
+# 1) najdu názvy sloupců končící na "_1hod_rok_1hod"
+cols_1hod <- grep("_1hod_rok_1hod$", names(allinone_stations), value = TRUE)
+
+# 2) funkce, která spočítá statistiky pro jeden vektor
+stat_fun <- function(x, p = 0.95) {
+  x <- as.numeric(x)
+  c(
+    mean   = mean(x, na.rm = TRUE),
+    median = median(x, na.rm = TRUE),
+    q25    = quantile(x, 0.25, na.rm = TRUE),
+    q75    = quantile(x, 0.75, na.rm = TRUE),
+    perc   = quantile(x, p,    na.rm = TRUE)  # např. 95. percentil
+  )
+}
+
+get_row_stats_for_pattern <- function(df, pattern) {
+  # najdu sloupce, které sedí na daný pattern
+  cols <- grep(pattern, names(df), value = TRUE)
+  if (length(cols) == 0) return(NULL)  # nic nenašel, vrátím NULL
+  
+  # hodnoty pro výpočet statistik
+  x <- df[cols]
+  
+  # základ: ID + statistiky po řádcích
+  row_stats <- data.frame(
+    ID = df$ID,
+    t(apply(x, 1, stat_fun)),
+    check.names = FALSE
+  )
+  
+  # zjistím "label" pro příponu (1hod, 3hod, 6hod ...) z názvu prvního sloupce
+  # např. BM3_1hod_rok_1hod -> vytáhne "1hod"
+  lab <- sub(".*_(\\d+hod).*", "\\1", cols[1])
+  
+  # přejmenuju sloupce statistik kromě ID
+  names(row_stats)[-1] <- paste0(names(row_stats)[-1], "_", lab)
+  
+  row_stats
+}
+
+patterns <- c(
+  "_10min_rok_10min",
+  "_1hod_rok_1hod$",
+  "_2hod_rok_2hod$",
+  "_3hod_rok_3hod$",
+  "_6hod_rok_6hod$"
+)
+
+# spočítat statistiky pro každý pattern
+stats_list <- lapply(patterns, function(pat) {
+  get_row_stats_for_pattern(allinone_stations, pat)
+})
+
+# vyhodit NULL (pro případ, že nějaký pattern nic nenašel)
+stats_list <- stats_list[!sapply(stats_list, is.null)]
+
+
+# když máš víc než jednu skupinu, spojíme podle ID
+if (length(stats_list) > 1) {
+  row_stats_all <- Reduce(function(x, y) merge(x, y, by = "ID"), stats_list)
+} else {
+  row_stats_all <- stats_list[[1]]
+}
+
+allinone_stations <- merge(
+  allinone_stations,
+  row_stats_all,
+  by = "ID"
+)
+
+write.csv(allinone_stations, "all_data_stanice.csv", row.names = FALSE)
+
+#co je co
+#SRA_10lete..mm._60 - návrhová srážka 10 leté opakování 60 minut
+#X1hod_rok_1hod_Q10_let - srážka spočítaná z dvaceti maxim tady Rkem - NENI TO UFA/CHMI
+#a_SRA_10lete..mm. - a, b a R2 - paremetry a spolehlivost mocninné funkce IDF ve stanicích
+#BM8_3hod_rok_3hod - blokové maximum BM8 - osme maximum, 3hod délka maxima, roční. Máme to i po měsících, ale to je asi por nás na nic
+
+
+
+plot(allinone_stations$SRA_10lete..mm._60, allinone_stations$`perc.95%_1hod.x`)
+abline(1,1)
+
+points(allinone_stations$SRA_10lete..mm._60, allinone_stations$X1hod_rok_1hod_Q20_let, col = "red")
+
+ggplot()
