@@ -6,6 +6,8 @@ library(tidyr)
 library(readr)   # read_csv / read_delim
 library(dplyr)
 library(purrr)
+library(corrplot)
+library(psych)
 
 
 # Define the file path
@@ -448,12 +450,49 @@ fit_power <- function(x, y) {
   
   # Výpočet R²
   y_pred <- predict(model)
+  resid  <- y - y_pred
   ss_res <- sum((y - y_pred)^2)
   ss_tot <- sum((y - mean(y))^2)
   r2 <- 1 - ss_res / ss_tot
+  n = length(x)
+  sd_resid <- if (n > 2) sqrt(ss_res / (n - 2)) else NA_real_  # tady n=3 => df=1
   
-  return(c(a = coefs[1], b = coefs[2], R2 = r2))
+  return(c(a = coefs[1], b = coefs[2], R2 = r2, res = resid, sd_res = sd_resid))
 }
+
+fit_power_lm <- function(x, y) {
+  # lm přes logy vyžaduje kladné hodnoty
+  ok <- is.finite(x) & is.finite(y) & x > 0 & y > 0
+  x2 <- x[ok]
+  y2 <- y[ok]
+  if (length(x2) < 2) return(NULL)
+  
+  model <- try(lm(log(y2) ~ log(x2)), silent = TRUE)
+  if (inherits(model, "try-error")) return(NULL)
+  
+  # Parametry: log(y) = beta0 + beta1*log(x) => a = exp(beta0), b = beta1
+  beta <- coef(model)
+  a <- exp(beta[1])
+  b <- unname(beta[2])
+  
+  # Predikce na původní škále (bez bias-korekce)
+  y_pred <- a * x2^b
+  
+  # Rezidua na původní škále
+  resid <- y2 - y_pred
+  
+  # R² na původní škále
+  ss_res <- sum(resid^2)
+  ss_tot <- sum((y2 - mean(y2))^2)
+  r2 <- 1 - ss_res / ss_tot
+  
+  n <- length(x2)
+  p <- length(coef(model))  # typicky 2 (intercept + slope)
+  sd_resid <- if (n > p) sqrt(ss_res / (n - p)) else NA_real_
+  
+  return(c(a = a, b = b, R2 = r2, res = resid, sd_res = sd_resid))
+}
+
 
 # Výsledky
 results <- data.frame()
@@ -473,24 +512,53 @@ for (st in stations) {
         Sloupec = col,
         a = params[1],
         b = params[2],
-        R2 = params[3]
+        R2 = params[3],
+        sd_res =params[4]
       ))
     }
   }
 }
 
-# Výpis výsledků
+
+
+for (st in stations) {
+  subset_data <- subset(data_all, ID == st)
+  x <- subset_data$TRVANI
+  
+  for (col in cols) {
+    y <- subset_data[[col]]
+    params <- fit_power(x, y)
+    if (!is.null(params)) {
+      resultslm <- rbind(resultslm, data.frame(
+        Stanice = st,
+        Sloupec = paste("lm", col, sep = "_") ,
+        a = params[1],
+        b = params[2],
+        R2 = params[3],
+        sd_res =params[4]
+      ))
+    }
+  }
+}
+
+
 print(results)
+
+
 
 setwd("d:/2_granty_projekty/2_Bezici/2023_SrUrb/01_reseni_projektu/08_blokova_maxima/")
 
 resultsW = pivot_wider(
   results, 
   names_from = "Sloupec",
-  values_from = c(3:5))
+  values_from = c(3:6))
 
+resultslmW = pivot_wider(
+  resultslm, 
+  names_from = "Sloupec",
+  values_from = c(3:6))
 
-
+resultsW = right_join(resultsW, resultslmW, by = "Stanice")
 
 
 # Uložení do CSV
@@ -498,7 +566,7 @@ write.csv(results, "vysledky_regrese.csv", row.names = FALSE)
 
 stationsCHMI = read.csv("stationsCHMI.csv")
 resultsW$ID = resultsW$Stanice
-resultsW$ID = as.numeric(resultsW$ID)
+#resultsW$ID = as.numeric(resultsW$ID)
 stationsCHMIlj = left_join(stationsCHMI, resultsW, by = "ID")
 write.csv(stationsCHMIlj, "vysledky_regrese_join.csv", row.names = FALSE)
 
@@ -597,4 +665,106 @@ abline(1,1)
 
 points(allinone_stations$SRA_10lete..mm._60, allinone_stations$X1hod_rok_1hod_Q20_let, col = "red")
 
-ggplot()
+plotplot = ggplot(data = allinone_stations_with_stats, aes( y = allinone_stations_with_stats$b_SRA_100lete..mm.))+#, color = SSM_, size = dapi5mean , label = date_form)) +#, fill = rain5dnu))  +
+  geom_boxplot()
+  #  geom_text(hjust=0, vjust=2, size = 2, color = "black") +
+  #scale_color_gradient(low="blue", high="red")
+plot((plotplot))
+
+
+allinone_stations = read.csv("all_data_stanice.csv")
+selDAT = allinone_stations[,c(20:32)]
+ccc = colnames(selDAT)
+
+selDAT_c = selDAT[, 2:13]
+ct <- psych::corr.test(selDAT_c, use = "pairwise", method = "pearson", adjust = "holm")
+R <- round(ct$r, 2)
+P <- ct$p
+
+corrplot::corrplot(R, method = "circle", order = "hclust",
+                   p.mat = P, insig = "blank")
+
+pairs.panels(
+  selDAT[, 2:13],
+  method   = "pearson",
+  use      = "pairwise",
+  ellipses = TRUE,
+  smooth   = TRUE,
+  density  = TRUE,
+  stars    = TRUE,     # <- hvězdičky jako v ukázce
+  cex.cor  = 0.9,      # zmenší čísla korelací (u 12 proměnných se hodí)
+  cex.labels = 0.7
+)
+
+##### mocniná funkce pro každýbod
+
+# --- nastavení: které 3 sloupce jsou "body" (y-hodnoty)
+cols_y <- all_data("Y1", "Y2", "Y3")   # <- přepiš na tvoje názvy sloupců
+x_vals <- c(1, 2, 3)           # <- nebo jiné X pozice (musí být délky 3)
+
+# --- fit mocninné funkce y = a * x^b (LS v původní škále, bez logování)
+fit_power_ls <- function(y, x = x_vals, b_range = c(-10, 10)) {
+  if (anyNA(y) || length(y) != length(x)) return(c(a = NA_real_, b = NA_real_))
+  
+  sse <- function(b) {
+    xb <- x^b
+    a  <- sum(y * xb) / sum(xb^2)         # nejlepší a pro dané b (uzavřeně)
+    sum((y - a * xb)^2)                   # chyba
+  }
+  
+  opt <- optimize(sse, interval = b_range)
+  b <- opt$minimum
+  xb <- x^b
+  a <- sum(y * xb) / sum(xb^2)
+  
+  c(a = a, b = b)
+}
+
+# --- aplikace na data.frame df
+params <- t(apply(df[, cols_y], 1, fit_power_ls))
+df$pow_a <- params[, "a"]
+df$pow_b <- params[, "b"]
+
+
+
+
+
+
+#### Navrhovky vse
+
+
+
+
+
+
+navhovky_all2025 = read.csv("Bodove_1x1km_1_6_24_hod.csv", sep = ";")
+
+results_pixels020 <- data.frame()
+pixels = unique(navhovky_all2025$Pixel)
+list_no = c("002", "005", "010", "020", "050", "100")
+list_no = c("020")
+
+#pixels = c(50:52)
+for (st in pixels) {
+  subset_data <- subset(navhovky_all2025, Pixel == st)
+  x <- as.numeric(c(30, 360, 1440))
+  
+  for (dt in list_no) {
+    y <- as.numeric(subset_data %>% select(contains(dt)))
+    params <- fit_power(x, y)
+    if (!is.null(params)) {
+      results_pixels020 <- rbind(results_pixels020, data.frame(
+        Pixel = st,
+        dobaopak = dt,
+        a = params[1],
+        b = params[2],
+        R2 = params[3],
+        sd_res =params[4]
+      ))
+    }
+  }
+}
+
+
+
+
