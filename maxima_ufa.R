@@ -8,6 +8,7 @@ library(dplyr)
 library(purrr)
 library(corrplot)
 library(psych)
+library(stringr)
 
 
 # Define the file path
@@ -765,6 +766,62 @@ for (st in pixels) {
   }
 }
 
+results_pixels020$t0015_comp = results_pixels020$a*15^results_pixels020$b
+results_pixels020$t0030_comp = results_pixels020$a*30^results_pixels020$b
+results_pixels020$t0060_comp = results_pixels020$a*60^results_pixels020$b
+results_pixels020$t0360_comp = results_pixels020$a*360^results_pixels020$b
+results_pixels020$t1440_comp = results_pixels020$a*1440^results_pixels020$b
+
+
+write.csv(results_pixels020, "results_pixels020.csv", row.names = FALSE)
+
+###### kvartily z maxim
+
+safe_q <- function(x, p = 0.8) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0) return(NA_real_)
+  as.numeric(quantile(x, probs = p, names = FALSE))
+}
+
+blocks <- c("10min","30min","1hod","2hod","3hod","6hod")
+
+for (b in blocks) {
+  cols_b <- grep(paste0("_", b, "_rok_", b, "$"), names(d_rok), value = TRUE)
+  
+  d_rok[[paste0("mean_", b)]]   <- apply(d_rok[, cols_b, drop = FALSE], 1, mean, na.rm = TRUE)
+  d_rok[[paste0("median_", b)]] <- apply(d_rok[, cols_b, drop = FALSE], 1, median, na.rm = TRUE)
+  d_rok[[paste0("q80_", b)]]    <- apply(d_rok[, cols_b, drop = FALSE], 1, safe_q, p = 0.8)
+}
 
 
 
+blocks <- c("10min","30min","1hod","2hod","3hod","6hod")
+
+# vezmeme všechny BM sloupce (BM1_..., BM2_..., ...)
+bm_cols <- grep("^BM\\d+_", names(d_rok), value = TRUE)
+
+stats_by_pixel <- d_rok %>%
+  pivot_longer(
+    cols = all_of(bm_cols),
+    names_to = "bm_var",
+    values_to = "value"
+  ) %>%
+  mutate(
+    block = str_extract(bm_var, paste0("(", paste(blocks, collapse = "|"), ")"))
+  ) %>%
+  filter(!is.na(block), is.finite(value)) %>%
+  group_by(id_pixel, block) %>%
+  summarise(
+    mean   = mean(value, na.rm = TRUE),
+    median = median(value, na.rm = TRUE),
+    q80    = as.numeric(quantile(value, probs = 0.8, na.rm = TRUE, names = FALSE)),
+    .groups = "drop"
+  ) %>%
+  pivot_wider(
+    names_from = block,
+    values_from = c(mean, median, q80),
+    names_glue = "{.value}_{block}"
+  )
+
+
+write.csv(stats_by_pixel, "mean_medQ80_pixels.csv", row.names = FALSE)
