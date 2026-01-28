@@ -564,6 +564,21 @@ resultsW = right_join(resultsW, resultslmW, by = "Stanice")
 
 # Uložení do CSV
 write.csv(results, "vysledky_regrese.csv", row.names = FALSE)
+regvys = read.csv("vysledky_regrese.csv")
+
+ggplot(regvys, aes(x = Stanice, y = R2)) +
+  geom_point(size = 2) +
+  facet_wrap(~ Sloupec, scales = "free_x") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    x = "Stanice",
+    y = expression(R^2)
+  )
+
 
 stationsCHMI = read.csv("stationsCHMI.csv")
 resultsW$ID = resultsW$Stanice
@@ -825,3 +840,60 @@ stats_by_pixel <- d_rok %>%
 
 
 write.csv(stats_by_pixel, "mean_medQ80_pixels.csv", row.names = FALSE)
+
+
+odchylky = read.csv("upovy_in_CR_EBK_odch_ExportTable.csv", header = TRUE, sep = ",", dec = ".", encoding = "UTF-8")
+library(tidyverse)
+
+# 1) Načtení
+df <- readr::read_csv("upovy_in_CR_EBK_odch_ExportTable.csv")
+
+df = odchylky
+# 2) Rozdělení na dvě tabulky (jen potřebné sloupce)
+df_mean <- df %>%
+  select(UPOV_ID, ends_with("_mean"))
+
+df_std <- df %>%
+  select(UPOV_ID, ends_with("_std"))
+
+# 3) Long formát + sjednocení názvu metriky (bez suffixu)
+mean_long <- df_mean %>%
+  pivot_longer(-UPOV_ID, names_to = "metric", values_to = "mean") %>%
+  mutate(metric = str_remove(metric, "_mean$"))
+
+std_long <- df_std %>%
+  pivot_longer(-UPOV_ID, names_to = "metric", values_to = "std") %>%
+  mutate(metric = str_remove(metric, "_std$"))
+
+# 4) Spojení mean + std
+dat <- mean_long %>%
+  left_join(std_long, by = c("UPOV_ID", "metric"))
+
+# 5) Graf pro vybrané UPOV (doporučené, facet pro 1135 UPOV by byl masakr)
+upov_sel <- c("BER_0010", "BER_0040", "BER_0050")  # <- uprav dle potřeby
+
+
+dat %>%
+  filter(UPOV_ID %in% upov_sel) %>%
+  ggplot(aes(x = metric, y = mean)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = mean - std, ymax = mean + std), width = 0.2) +
+  facet_wrap(~ UPOV_ID, scales = "free_y") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(x = "Metrika (bez _mean/_std)", y = "Průměr (± SD)")
+
+dat %>%
+  ggplot(aes(x = metric, y = mean, group = UPOV_ID)) +
+  geom_line(color = "blue", alpha = 0.15) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(x = "výkon modelu", y = "mean (pro jednotlivé UPOV)")
+
+dat %>%
+  ggplot(aes(x = metric, y = std, group = UPOV_ID)) +
+  geom_line(color = "red", alpha = 0.15) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  labs(x = "výkon modelu", y = "std (pro jednotlivé UPOV)")
+
